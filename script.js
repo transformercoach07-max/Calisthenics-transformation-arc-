@@ -485,27 +485,54 @@ const timeRules = {
     }
 };
 
+// ============================section 11============================// 
 
-// ============================
-// SECTION 11: WORKOUT GENERATION
-// ============================
 
+// Movement hierarchies, ordered EASIEST -> HARDEST. This is what determines
+// which exercises are "nearby" a user's assessed ability level.
+// Same-difficulty movements (Explosive/Deficit/Decline/Diamond Push-up) are
+// kept as separate entries at adjacent positions since they hit different
+// muscles/emphases even though they're roughly equal difficulty.
+const movementHierarchy = {
+    push: [
+        "Wall Push-up",
+        "Incline Push-up",
+        "Knee Push-up",
+        "Normal Push-up",
+        "Wide Push-up",
+        "Diamond Push-up",
+        "Decline Push-up",
+        "Deficit Push-up",
+        "Explosive Push-up",
+        "Archer Push-up",
+        "One-arm Push-up"
+    ],
+    pull: [
+        "Table Row",
+        "Higher Table Row",
+        "Australian Row",
+        "Hammer Pull-up",
+        "Close-grip Pull-up",
+        "Wide Pull-up",
+        "Chest-to-bar Pull-up",
+        "Archer Pull-up",
+        "Weighted Pull-up"
+    ],
+    legs: [
+        "Squat",
+        "Explosive Squat",
+        "Deep Squat",
+        "Sumo Squat",
+        "Static Lunges",
+        "Walking Lunges",
+        "Bulgarian Split Squat",
+        "Assisted Pistol Squat",
+        "Pistol Squat"
+    ]
+};
+
+// Non-progression pools (unchanged from before).
 const exercisePools = {
-    push: {
-        1: ["Wall Push-up", "Knee Push-up", "Incline Push-up"],
-        2: ["Wide Push-up", "Diamond Push-up", "Decline Push-up"],
-        3: ["Archer Push-up", "Deficit Push-up", "Explosive Push-up", "One-arm Push-up"]
-    },
-    pull: {
-        1: ["Table Row", "Higher Table Row", "Australian Row"],
-        2: ["Hammer Pull-up", "Close-grip Pull-up", "Wide Pull-up"],
-        3: ["Chest-to-bar Pull-up", "Archer Pull-up", "Weighted Pull-up"]
-    },
-    legs: {
-        1: ["Bodyweight Squat", "Split Squat", "Lunges"],
-        2: ["Sumo Squat", "Bulgarian Split Squat", "Deep Squat"],
-        3: ["Explosive Squat", "Shrimp Squat", "Weighted Squat"]
-    },
     mobility: [
         "Hip Flexor Stretch", "Shoulder Dislocates (band or towel)", "Cat-Cow Stretch",
         "World's Greatest Stretch", "Ankle Mobility Drill", "Thoracic Spine Rotation"
@@ -516,44 +543,74 @@ const exercisePools = {
     ]
 };
 
-function getTierForCategory(category, exerciseName, reps) {
-    const orderedList = category === "push" ? pushOptions
-        : category === "pull" ? pullOptions
-        : legOptions;
+// IMPORTANT NOTE ON LEGS: your assessment dropdown (legOptions, Section 2,
+// untouched) uses different exercise names than the new leg hierarchy above
+// -- e.g. "Bodyweight Squat", "Split Squat", "Shrimp Squat", "Weighted Squat"
+// aren't in movementHierarchy.legs. Push and Pull assessment options already
+// match their hierarchies exactly, so no mapping is needed for those. For
+// legs, this table maps each assessment option to its closest equivalent in
+// movementHierarchy.legs, purely so an assessment answer can be located on
+// the new hierarchy. Adjust any of these if you'd map them differently:
+const legAssessmentToHierarchy = {
+    "Bodyweight Squat": "Squat",
+    "Split Squat": "Static Lunges",
+    "Lunges": "Walking Lunges",
+    "Sumo Squat": "Sumo Squat",
+    "Bulgarian Split Squat": "Bulgarian Split Squat",
+    "Deep Squat": "Deep Squat",
+    "Explosive Squat": "Explosive Squat",
+    "Shrimp Squat": "Pistol Squat",
+    "Weighted Squat": "Bulgarian Split Squat"
+};
 
-    const index = orderedList.indexOf(exerciseName);
-    const position = index === -1 ? 0 : index / (orderedList.length - 1);
+function getAssessmentPosition(category, exerciseName) {
+    const hierarchy = movementHierarchy[category];
 
-    let tier;
-    if (position < 0.34) {
-        tier = 1;
-    } else if (position < 0.67) {
-        tier = 2;
-    } else {
-        tier = 3;
+    let matchedName = exerciseName;
+    if (category === "legs" && legAssessmentToHierarchy[exerciseName]) {
+        matchedName = legAssessmentToHierarchy[exerciseName];
     }
 
-    if (reps < 5 && tier > 1) {
-        tier -= 1;
-    } else if (reps >= 15 && tier < 3) {
-        tier += 1;
-    }
-
-    return tier;
+    const index = hierarchy.indexOf(matchedName);
+    return index === -1 ? 0 : index;
 }
 
+// Same spirit as your old tier system: very low reps on the chosen variation
+// pull the position down (they picked something a bit beyond them), very
+// high reps push it up (they've outgrown that variation).
+function adjustPositionForReps(position, reps, maxIndex) {
+    let adjusted = position;
+
+    if (reps < 5) {
+        adjusted -= 1;
+    } else if (reps >= 20) {
+        adjusted += 2;
+    } else if (reps >= 12) {
+        adjusted += 1;
+    }
+
+    return Math.max(0, Math.min(maxIndex, adjusted));
+}
+
+// Returns each category's current position on its movementHierarchy
+// (0 = easiest). This is ability/progression level only -- it is NOT an
+// exercise name, and it never determines every exercise in a workout.
 function getUserTiers() {
     const assessment = getAssessment();
 
     if (!assessment) {
-        return { push: 1, pull: 1, legs: 1 };
+        return { push: 0, pull: 0, legs: 0 };
     }
 
-    return {
-        push: getTierForCategory("push", assessment.push.exercise, assessment.push.reps),
-        pull: getTierForCategory("pull", assessment.pull.exercise, assessment.pull.reps),
-        legs: getTierForCategory("legs", assessment.legs.exercise, assessment.legs.reps)
-    };
+    const result = {};
+    ["push", "pull", "legs"].forEach(function (category) {
+        const hierarchy = movementHierarchy[category];
+        const maxIndex = hierarchy.length - 1;
+        const rawPosition = getAssessmentPosition(category, assessment[category].exercise);
+        result[category] = adjustPositionForReps(rawPosition, assessment[category].reps, maxIndex);
+    });
+
+    return result;
 }
 
 function getTodayWorkoutType(splitKey) {
@@ -582,8 +639,6 @@ function generateAndShowWorkout(chosenSplit, chosenTime) {
 
     displayWorkout(workoutType, workoutPlan, rules);
 }
-
-
 // ============================
 // SECTION 12: REP PROMISE
 // ============================
@@ -654,15 +709,75 @@ function maybeAssignTechnique(rules, exerciseIndexInWorkout) {
 // SECTION 14: WORKOUT SPLITS
 // ============================
 
-function pickExerciseFromPool(category, tier) {
-    const pool = exercisePools[category][tier] || exercisePools[category][1];
-    const randomIndex = Math.floor(Math.random() * pool.length);
-    return pool[randomIndex];
+function shuffleArray(arr) {
+    const copy = arr.slice();
+    for (let i = copy.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const temp = copy[i];
+        copy[i] = copy[j];
+        copy[j] = temp;
+    }
+    return copy;
 }
 
-function buildExerciseEntry(category, tiers, rules, indexInWorkout) {
-    const tier = tiers[category];
-    const exerciseName = pickExerciseFromPool(category, tier);
+// Picks `count` unique exercise names for `category`, centered on the
+// user's assessed position. Starts with a tight window around that
+// position (a couple of steps easier, one step harder for slight
+// challenge) and, only if that isn't enough to fill `count`, widens the
+// window outward -- it never repeats an exercise to fill a slot.
+// `alreadyUsed` lets Full Body reserve names already picked for another
+// slot in the same workout.
+function pickUniqueExercisesForCategory(category, position, count, alreadyUsed) {
+    const hierarchy = movementHierarchy[category];
+    const maxIndex = hierarchy.length - 1;
+    const used = alreadyUsed || [];
+
+    let lowerReach = 2;
+    let upperReach = 1;
+
+    const selected = [];
+
+    while (selected.length < count) {
+        const lowerBound = Math.max(0, position - lowerReach);
+        const upperBound = Math.min(maxIndex, position + upperReach);
+
+        const candidates = [];
+        for (let i = lowerBound; i <= upperBound; i++) {
+            const name = hierarchy[i];
+            if (used.indexOf(name) === -1 && candidates.indexOf(name) === -1) {
+                candidates.push(name);
+            }
+        }
+
+        const shuffled = shuffleArray(candidates);
+        for (let i = 0; i < shuffled.length && selected.length < count; i++) {
+            selected.push(shuffled[i]);
+            used.push(shuffled[i]);
+        }
+
+        if (lowerBound === 0 && upperBound === maxIndex) {
+            break; // whole hierarchy considered, nothing left to add
+        }
+
+        lowerReach += 1;
+        upperReach += 1;
+    }
+
+    return selected;
+}
+
+function getCoachingCue(category) {
+    const cues = {
+        push: "Keep your core tight and elbows at a slight angle, not flared out.",
+        pull: "Pull with your back, not just your arms - lead with your elbows.",
+        legs: "Keep your knees tracking over your toes and go as deep as feels controlled.",
+        mobility: "Move slow and controlled - this isn't about speed, it's about range.",
+        activeRecovery: "Keep the effort light. This day is for recovery, not performance."
+    };
+    return cues[category] || "Focus on clean, controlled form.";
+}
+
+function buildExerciseEntry(category, exerciseName, rules, indexInWorkout) {
     const repRange = getRepTarget(category);
     const technique = maybeAssignTechnique(rules, indexInWorkout);
 
@@ -677,20 +792,9 @@ function buildExerciseEntry(category, tiers, rules, indexInWorkout) {
     };
 }
 
-function getCoachingCue(category) {
-    const cues = {
-        push: "Keep your core tight and elbows at a slight angle, not flared out.",
-        pull: "Pull with your back, not just your arms - lead with your elbows.",
-        legs: "Keep your knees tracking over your toes and go as deep as feels controlled.",
-        mobility: "Move slow and controlled - this isn't about speed, it's about range.",
-        activeRecovery: "Keep the effort light. This day is for recovery, not performance."
-    };
-    return cues[category] || "Focus on clean, controlled form.";
-}
-
 function buildRestStyleDay(poolKey, exerciseCount) {
     const pool = exercisePools[poolKey];
-    const shuffled = pool.slice().sort(function () { return Math.random() - 0.5; });
+    const shuffled = shuffleArray(pool);
     const chosen = shuffled.slice(0, exerciseCount);
 
     return chosen.map(function (name) {
@@ -719,30 +823,49 @@ function buildWorkoutForType(workoutType, rules, tiers) {
         return buildRestStyleDay("activeRecovery", 3);
     }
 
-    const exercises = [];
     const count = rules.exerciseCount;
 
-    if (workoutType === "Push") {
-        for (let i = 0; i < count; i++) {
-            exercises.push(buildExerciseEntry("push", tiers, rules, i));
+    if (workoutType === "Push" || workoutType === "Pull" || workoutType === "Legs") {
+        const category = workoutType.toLowerCase();
+        const names = pickUniqueExercisesForCategory(category, tiers[category], count, []);
+
+        const exercises = [];
+        for (let i = 0; i < names.length; i++) {
+            exercises.push(buildExerciseEntry(category, names[i], rules, i));
         }
-    } else if (workoutType === "Pull") {
-        for (let i = 0; i < count; i++) {
-            exercises.push(buildExerciseEntry("pull", tiers, rules, i));
-        }
-    } else if (workoutType === "Legs") {
-        for (let i = 0; i < count; i++) {
-            exercises.push(buildExerciseEntry("legs", tiers, rules, i));
-        }
-    } else if (workoutType === "Full Body") {
-        const categories = ["push", "pull", "legs"];
-        for (let i = 0; i < count; i++) {
-            const category = categories[i % categories.length];
-            exercises.push(buildExerciseEntry(category, tiers, rules, i));
-        }
+        return exercises;
     }
 
-    return exercises;
+    if (workoutType === "Full Body") {
+        const categories = ["push", "pull", "legs"];
+
+        // Same round-robin slot order as before, so category placement
+        // within the workout stays familiar.
+        const slots = [];
+        for (let i = 0; i < count; i++) {
+            slots.push(categories[i % categories.length]);
+        }
+
+        const countPerCategory = { push: 0, pull: 0, legs: 0 };
+        slots.forEach(function (c) { countPerCategory[c] += 1; });
+
+        const namesPerCategory = {};
+        categories.forEach(function (c) {
+            namesPerCategory[c] = pickUniqueExercisesForCategory(c, tiers[c], countPerCategory[c], []);
+        });
+
+        const nextIndexPerCategory = { push: 0, pull: 0, legs: 0 };
+        const exercises = [];
+        for (let i = 0; i < slots.length; i++) {
+            const category = slots[i];
+            const name = namesPerCategory[category][nextIndexPerCategory[category]];
+            nextIndexPerCategory[category] += 1;
+            exercises.push(buildExerciseEntry(category, name, rules, i));
+        }
+        return exercises;
+    }
+
+    return [];
 }
 
 
